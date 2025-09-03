@@ -1,6 +1,7 @@
 from src.base.itinerary import Itinerary
 from src.route.planner import RoutePlanner
-from src.plan.builder import ItineraryBuilder
+from src.agent.builder import ItineraryBuilder
+from src.visualize.visualizer import RouteVisualizer
 import logging
 from dotenv import load_dotenv
 import gpxpy
@@ -21,8 +22,8 @@ if __name__ == "__main__":
 
     agent = ItineraryBuilder(api_key=api_key, model="gemini-2.5-flash", temperature=0, debug=False)
 
-    #query = "I want to do a nice 5km run in Krakow, starting from the castle going through the old town and the university district, and ending back at the castle. I prefer scenic routes with some historical landmarks along the way."
-    query = "I want to do a nice 10km run in Milan, starting from Arco della Pace going through Parco Sempione, Castello Sforzesco, and Brera district, and ending back at Arco della Pace. I prefer scenic routes with some historical landmarks along the way."
+    query = "I want to do a nice 5km run in Krakow, starting from the castle going through the old town and the university district, and ending back at the castle. I prefer scenic routes with some historical landmarks along the way."
+    # query = "I want to do a nice 10km run in Milan, starting from Arco della Pace going through Parco Sempione, Castello Sforzesco, and Brera district, and ending back at Arco della Pace. I prefer scenic routes with some historical landmarks along the way."
     
     suggested_itinerary = agent.request_running_itinerary(query)
 
@@ -38,25 +39,8 @@ if __name__ == "__main__":
     
     route = planner.create_route(suggested_itinerary)
 
-    # visualize the GPX data (optional)
-    gpx_file = open('out/itinerary_route.gpx', 'r')
-    gpx = gpxpy.parse(gpx_file)
-    points = []
-    for track in gpx.tracks:
-        for segment in track.segments:
-            for point in segment.points:
-                points.append(tuple([point.latitude, point.longitude]))
+    visualizer = RouteVisualizer(route)
 
-    # 3. Create a Folium map centered on the starting point
-    if points:
-        start_point = points[0]
-        my_map = folium.Map(location=start_point, zoom_start=14)
+    visualizer.create_map()
 
-        # Add the route as a line to the map
-        folium.PolyLine(points, color="blue", weight=2.5, opacity=1).add_to(my_map)
-
-        # Save the map as an HTML file
-        my_map.save("out/route_map.html")
-        print("Map 'route_map.html' has been created successfully.")
-    else:
-        print("No points found in the GPX file.")
+    visualizer.save()
