@@ -5,10 +5,9 @@ import logging
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from langchain.chains import LLMChain, SequentialChain
 from time import time
 
-from src.plan.templates import ValidationTemplate, ItinearyDesignTemplate, MappingTemplate
+from src.agent.templates import ValidationTemplate, ItinearyDesignTemplate, MappingTemplate
 from src.base.itinerary import Itinerary
 from src.base.itinerary import Itinerary, UnfeasibleItinerary
 
@@ -39,52 +38,6 @@ class ItineraryBuilder(object):
         self.validation_prompt = ValidationTemplate()
         self.itinerary_prompt = ItinearyDesignTemplate()
         self.mapping_prompt = MappingTemplate()
-
-        self.validation_chain = self._setup_validation_chain(debug)
-        self.agent_chain = self._setup_agent_chain(debug)
-
-    def _setup_validation_chain(self, debug):
-        
-        validation_agent = LLMChain(
-            llm=self.chat_model,
-            prompt=self.validation_prompt(),
-            output_key="validation_output",
-            verbose=debug
-        )
-        
-        overall_chain = SequentialChain(
-            chains=[validation_agent],
-            input_variables=["query", "format_instructions"],
-            output_variables=["validation_output"],
-            verbose=debug,
-        )
-
-        return overall_chain
-
-    def _setup_agent_chain(self, debug):
-        
-        itinerary_agent = LLMChain(
-            llm=self.chat_model,
-            prompt=self.itinerary_prompt(),
-            verbose=debug,
-            output_key="agent_suggestion",
-        )
-
-        mapping_agent = LLMChain(
-            llm=self.chat_model,
-            prompt=self.mapping_prompt(),
-            verbose=debug,
-            output_key="mapping_json",
-        )
-
-        overall_chain = SequentialChain(
-            chains=[itinerary_agent, mapping_agent],
-            input_variables=["query", "format_instructions"],
-            output_variables=["agent_suggestion", "mapping_json"],
-            verbose=debug,
-        )
-
-        return overall_chain
     
     def request_running_itinerary(self, query):
         # TODO add starting point as input parameter
@@ -93,13 +46,13 @@ class ItineraryBuilder(object):
 
         self.logger.info("Validating user input")
         t1 = time()
-        validation_result = self.validation_chain(
-            {
-                "query": query,
-                "format_instructions": self.validation_prompt.parser.get_format_instructions()
-            }
+        validation_messages = self.validation_prompt().format_messages(
+            query=query,
+            format_instructions=self.validation_prompt.parser.get_format_instructions(),
         )
-        validation_test = self.validation_prompt.parser.parse(validation_result["validation_output"])
+        validation_response = self.chat_model.invoke(validation_messages)
+        validation_text = getattr(validation_response, "content", str(validation_response))
+        validation_test = self.validation_prompt.parser.parse(validation_text)
         t2 = time()
         self.logger.info("Time to validate request: {}".format(round(t2 - t1, 2)))
 
@@ -109,25 +62,31 @@ class ItineraryBuilder(object):
             return UnfeasibleItinerary(updated_request=validation_test.updated_request)
 
         # if we reach here, the plan is valid
+        # TODO: RAG system to avoid hallucinations
         self.logger.info("User request is valid, generating itinerary")
         t1 = time()
-        agent_result = self.agent_chain(
-                {
-                    "query": query,
-                    "format_instructions": self.mapping_prompt.parser.get_format_instructions(),
-                }
-            )
+        # Step 1: Produce narrated itinerary suggestion
+        itinerary_messages = self.itinerary_prompt().format_messages(query=query)
+        itinerary_response = self.chat_model.invoke(itinerary_messages)
+        agent_suggestion = getattr(itinerary_response, "content", str(itinerary_response))
+
+        # Step 2: Map narrated itinerary to structured start/end/waypoints JSON
+        mapping_messages = self.mapping_prompt().format_messages(
+            agent_suggestion=agent_suggestion,
+            format_instructions=self.mapping_prompt.parser.get_format_instructions(),
+        )
+        mapping_response = self.chat_model.invoke(mapping_messages)
+        mapping_text = getattr(mapping_response, "content", str(mapping_response))
         t2 = time()
         self.logger.info("Time to generate itinerary: {}".format(round(t2 - t1, 2)))
-        
 
-        mapping_data = self.mapping_prompt.parser.parse(agent_result["mapping_json"])
+        mapping_data = self.mapping_prompt.parser.parse(mapping_text)
         
         suggested_itinerary = Itinerary(
             start=mapping_data.start,
             end=mapping_data.end,
             waypoints=mapping_data.waypoints,
-            itinerary=agent_result["agent_suggestion"]
+            itinerary=agent_suggestion
         )
 
 
